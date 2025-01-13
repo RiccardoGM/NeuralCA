@@ -59,7 +59,6 @@ class Bot:
         padded_image = utils.apply_periodic_padding(image, self.kernel_size)
         new_padded_image = cv2.filter2D(padded_image, -1, self.kernel)
         new_image = utils.apply_crop(new_padded_image, self.kernel_size)
-        new_image = utils.apply_crop(new_padded_image, self.kernel_size)
         #new_image = cv2.filter2D(image, -1, self.kernel, borderType=cv2.BORDER_WRAP)
         
         if self.activation!='identity':
