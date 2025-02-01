@@ -78,7 +78,7 @@ class Bot:
 # ************************************************ #
 
 class Rewarder:
-    def __init__(self, desiderata, scales=[13, 7], sigma=4.):
+    def __init__(self, desiderata, scales=[13, 7], sigma=4., var_th=1e-3):
         '''
         note: use odd numbers for scales
         '''
@@ -86,9 +86,11 @@ class Rewarder:
         self.desiderata = np.array(desiderata)
         self.reward = None
         self.observation = None
-        self.is_end = None
+        self.variance = None
+        self.is_end = False
         self.scales = scales
         self.sigma = sigma
+        self.var_th = var_th
 
     def update(self, image):
         """
@@ -102,12 +104,16 @@ class Rewarder:
         scale2 = min(image.shape) // self.scales[1]
         var1 = self.compute_variance(image, scale1)
         var2 = self.compute_variance(image, scale2)
+        self.variance = np.array([var1, var2])
         n_objects = self.count_objects(image)
-        self.observation = np.array([var1, var2, n_objects])
-        diff = self.desiderata - self.observation
-        self.reward = 1/gmean(abs(diff))
-        self.is_end = var1 + var2 == 0
-        
+        n_objects_transformed = np.tanh(n_objects/1000)
+        self.observation = np.array([var1, var2, n_objects_transformed], dtype=np.float32)
+        diff = self.desiderata - self.observation + 1e-10
+        self.reward = 0.1/gmean(abs(diff))
+        self.is_end = max(self.variance) < self.var_th
+        if self.is_end:
+            self.reward = 0
+
     def compute_variance(self, image, scale=None):
         """
         compute the normalised variance of the image in local regions defined by the scale,
@@ -188,13 +194,14 @@ class Environment(gym.Env):
         self.timestep = 0
         self.image = self.image_t0.copy()
         self.parameters = self.parameters_t0.copy()
-        return_obs = self.parameters.flatten()
+        self.rewarder.update(self.image)
+        return_obs = self.rewarder.observation
         return_info = {'image': 'reset to t0',
                        'timestep': self.timestep}
         
         return return_obs, return_info
 
-    def step(self):
+    def step(self, action=None):
 
         for _ in range(self.mid_timesteps):
             # Update
@@ -207,7 +214,8 @@ class Environment(gym.Env):
 
         # End episode flag
         terminated = bool(self.timestep > self.max_timesteps) 
-        terminated = terminated | self.rewarder.is_end
+        terminated = bool(terminated | self.rewarder.is_end)
+        truncated = False
 
         # Observation
         observation = self.rewarder.observation
@@ -217,4 +225,4 @@ class Environment(gym.Env):
                 'observation': observation,
                 'reward': reward}
 
-        return observation, reward, terminated, info
+        return observation, reward, terminated, truncated, info
