@@ -1,0 +1,54 @@
+# ── Bot ────────────────────────────────────────────────────────────────────────
+bot:
+  kernel_size: 3
+  f_symm: true        # full (4-way) symmetry; set h_symm/v_symm only when f_symm is false
+  h_symm: false
+  v_symm: false
+  fixed_center: true  # fix centre coefficient to kernel_center
+  kernel_center: 0.5
+  activation: inv_gaussian     # identity | inv_gaussian | abs
+  kernel_prec: 2
+  scale_kernel: false
+
+# ── Rewarder ───────────────────────────────────────────────────────────────────
+rewarder:
+  n_objects_target: 230   # desired number of objects in the final state
+  n_objects_scale: 100    # divisor in tanh(n_objects / n_objects_scale); tune to expected max count
+  sigma: 1.0              # Gaussian smoothing sigma applied before thresholding
+
+# ── Observation (for RL conditioning) ─────────────────────────────────────────
+observation:
+  n_objects_min: 1
+  n_objects_max: 500      # set to 1000 if desired
+
+# ── Environment ────────────────────────────────────────────────────────────────
+env:
+  edge_len: 400           # side length of the square simulation grid
+  t_max: 5000             # max CA steps per episode (whole dynamics)
+  mid_timesteps: 20       # CA steps per environment step
+  var_th: 0.0001          # variance threshold for early truncation (frozen state)
+  pixel_lbound: -1
+  pixel_ubound: 1
+  terminal_reward_only: true  # training script enforces this regardless
+
+# ── PPO training ───────────────────────────────────────────────────────────────
+training:
+  total_timesteps: 300000
+  learning_rate: 0.0003
+  n_steps: 1024
+  batch_size: 256
+  gamma: 0.99
+  gae_lambda: 0.95
+  epsilon: 0.2            # PPO clip epsilon (alias for clip_range)
+  clip_range: 0.2
+  ent_coef: 0.02          # higher entropy helps reduce mode collapse
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  use_sde: true           # state-dependent exploration for continuous actions
+  sde_sample_freq: 4
+  eval_freq: 5000
+  n_eval_episodes: 8
+  deterministic_eval: true
+  seed: 42
+  best_model_dir: models/best_policy
+  tb_log_dir: models/tb_logs
