@@ -2,8 +2,6 @@
 import numpy as np
 import gymnasium as gym
 import cv2
-import skimage as ski 
-from scipy.stats import gmean
 
 ## Import custom modules
 import sys
@@ -25,8 +23,24 @@ class Bot:
     def __init__(self, kernel=[], kernel_size=3, f_symm=True, h_symm=True, v_symm=True, fixed_center=True, 
                  kernel_center=0.5, activation='identity', kernel_prec=1, scale_kernel=False):
         '''
-        note: use odd numbers for kernel_size
-        kernel formats
+        Cellular automata transition operator based on a convolution kernel.
+
+        args:
+            kernel:        optional 2D kernel. If empty, a random kernel is built
+                           from the symmetry constraints.
+            kernel_size:   odd side length of the kernel when `kernel` is not given.
+            f_symm:        full (4-way) symmetry constraint.
+            h_symm:        horizontal symmetry constraint.
+            v_symm:        vertical symmetry constraint.
+            fixed_center:  if True, center coefficient is fixed to `kernel_center`.
+            kernel_center: value used for the center when `fixed_center=True`.
+            activation:    post-convolution activation name:
+                           `identity`, `inv_gaussian`, or `abs`.
+            kernel_prec:   decimal precision used when rounding kernel values.
+            scale_kernel:  if True, divide kernel values by `kernel_size**2`.
+
+        note: use odd numbers for kernel_size.
+        kernel formats:
             f symmetry:            h & v symmetry:        h symmetry:            v symmetry:
             +-----+-----+-----+    +-----+-----+-----+    +-----+-----+-----+    +-----------------+
             |  A  |  B  |  A  |    |  A  |  B  |  A  |    |     |     |     |    |        A        |
@@ -120,7 +134,7 @@ class Bot:
             kernel[ks//2,1+ks//2:] = kernel_b
             # C
             kernel_c = parameters[na+nb:na+nb+nc]
-            kernel[ks//2,ks//2] = kernel_c         
+            kernel[ks//2, ks//2] = kernel_c[0] if isinstance(kernel_c, (list, np.ndarray)) else kernel_c
         elif self.hv_sym:
             na = self.kernel_na
             nb = self.kernel_nb
@@ -140,11 +154,11 @@ class Bot:
             kernel[1+ks//2:,ks//2] = kernel_b
             # C
             kernel_c = parameters[na+nb:na+nb+nc]
-            kernel[ks//2,:ks//2] = kernel_c
-            kernel[ks//2,1+ks//2:] = kernel_c
+            kernel[ks//2,:ks//2] = kernel_c[0] if isinstance(kernel_c, (list, np.ndarray)) else kernel_c
+            kernel[ks//2,1+ks//2:] = kernel_c[0] if isinstance(kernel_c, (list, np.ndarray)) else kernel_c
             # D
             kernel_d = parameters[na+nb+nc:na+nb+nc+nd]
-            kernel[ks//2,ks//2] = kernel_d
+            kernel[ks//2,ks//2] = kernel_d[0] if isinstance(kernel_d, (list, np.ndarray)) else kernel_d
         elif self.h_symm:
             if self.fixed_center:
                 raise ValueError("Fixed center not allowed for horizontal symmetry only")
@@ -211,9 +225,21 @@ class Bot:
 # ************************************************ #
 
 class Rewarder:
-    def __init__(self, desiderata, scales=[40, 10], sigma=4., pixel_lbound=-1, pixel_ubound=1):
+    def __init__(self, desiderata, scales=[40, 10], sigma=4., n_objects_scale=100, pixel_lbound=-1, pixel_ubound=1):
         '''
-        note: use odd numbers for scales
+        Computes observations and reward from the CA state.
+
+        args:
+            desiderata:      target observation vector used in reward computation.
+            scales:          optional scale factors used by multi-scale observation
+                             helpers (`compute_obs_1/2/3`).
+            sigma:           Gaussian smoothing sigma applied before object counting.
+            n_objects_scale: expected maximum object count; used to normalise the
+                             object count via tanh so the observation spans [0, 1].
+            pixel_lbound:    lower bound of state pixel values.
+            pixel_ubound:    upper bound of state pixel values.
+
+        note: use odd numbers for scales.
         '''
         # Initialise attributes
         self.desiderata = np.array(desiderata)
@@ -222,6 +248,7 @@ class Rewarder:
         self.variance = None
         self.scales = scales
         self.sigma = sigma
+        self.n_objects_scale = n_objects_scale
         self.max_variance = (1/4.) * (pixel_ubound-pixel_lbound)**2
 
     def update(self, state):
@@ -233,46 +260,16 @@ class Rewarder:
         if len(state.shape) != 2:
             raise ValueError("input must be a 2D array")
         self.variance = self.compute_variance(state)
-        #self.observation = self.compute_obs_1(state)
-        #self.observation = self.compute_obs_2(state)
-        #self.observation = self.compute_obs_3(state)
         #
-        #n_objects = self.count_objects(state)
-        #n_objects_transformed = np.tanh(n_objects/1000)
-        #self.observation = np.array([n_objects_transformed], dtype=np.float32)
-        #
-        variance = self.compute_variance(state)
-        self.observation = np.array([variance], dtype=np.float32)
-        diff = self.desiderata - self.observation + 1e-10
-        rexp = 1./gmean(abs(diff))
-        self.reward = rexp #1-np.exp(-rexp)
-
-    def compute_obs_1(self, state):
-        '''FIX: compute_variance has default scale=None'''
-        scale1 = min(state.shape) // self.scales[0]
-        var1 = self.compute_variance(state, scale1)
-        observation = np.array([var1], dtype=np.float32)
-        return observation
-
-    def compute_obs_2(self, state):
-        '''FIX: compute_variance has default scale=None'''
-        scale1 = min(state.shape) // self.scales[0]
-        scale2 = min(state.shape) // self.scales[1]
-        var1 = self.compute_variance(state, scale1)
-        var2 = self.compute_variance(state, scale2)
-        observation = np.array([var1, var2], dtype=np.float32)
-        return observation
-
-    def compute_obs_3(self, state):
-        '''FIX: compute_variance has default scale=None'''
-        scale1 = min(state.shape) // self.scales[0]
-        scale2 = min(state.shape) // self.scales[1]
-        var1 = self.compute_variance(state, scale1)
-        var2 = self.compute_variance(state, scale2)
         n_objects = self.count_objects(state)
-        n_objects_transformed = np.tanh(n_objects/1000)
-        observation = np.array([var1, var2, n_objects_transformed], dtype=np.float32)
-        return observation
+        n_objects_transformed = np.tanh(n_objects / self.n_objects_scale)
+        self.observation = np.array([n_objects_transformed], dtype=np.float32)
+        #
+        # variance = self.compute_variance(state)
+        # self.observation = np.array([variance], dtype=np.float32)
+        #
+        diff = self.desiderata - self.observation
+        self.reward = float(np.exp(-np.linalg.norm(diff)))
         
     def compute_variance(self, state, scale=None):
         """
@@ -292,13 +289,26 @@ class Rewarder:
             normalized_variance = np.mean(local_variance) / self.max_variance
         return normalized_variance
     
-    def count_objects(self, state, connectivity=2):
+    def count_objects(self, state, threshold='otsu', threshold_rel=0.5, connectivity=2):
         """
-        compute number of distinct objects within the state
-        CHECK: periodic boundary conditions?
+        Count distinct objects in an amplitude-invariant way.
+
+        The state is first smoothed, then min-max normalised to [0, 1], so the
+        same morphology gives the same count regardless of absolute amplitude
+        scaling (e.g., 0..10 vs 0..255).
+
+        args:
+            threshold:     'otsu' (default), 'relative', or a numeric value in [0, 1].
+            threshold_rel: relative threshold used when threshold='relative'.
+            connectivity:  connectivity passed to skimage.measure.label.
         """
-        edges = ski.feature.canny(state, sigma=self.sigma)
-        _, n_objects = ski.measure.label(edges, return_num=True, connectivity=connectivity)
+        _, n_objects, _ = utils.detect_objects_image(
+            state,
+            sigma=self.sigma,
+            threshold=threshold,
+            threshold_rel=threshold_rel,
+            connectivity=connectivity,
+        )
         return n_objects
 
 
@@ -314,10 +324,17 @@ class Environment(gym.Env):
                  mid_timesteps=20, edge_len=400, var_th=1e-4, pixel_lbound=-1, pixel_ubound=1):
         '''
         args:
-            n_free_parameters:  dimension action space (scalar)
-            bot:                object performing the convolution
-            desiderata:         1D array with desired geom. properties
-            rewarder:           object that evaluates the reward
+            bot:                    object performing the convolution
+            n_free_parameters:      dimension of the action space (scalar)
+            observation_boundaries: array of shape (n_obs, 2) with [low, high] bounds
+                                    for each observation dimension
+            rewarder:               object that evaluates observation and reward
+            max_timesteps:          maximum number of environment timesteps per episode
+            mid_timesteps:          number of internal CA updates per env step
+            edge_len:               side length of the square image/state
+            var_th:                 variance threshold used for early truncation
+            pixel_lbound:           lower bound for state/image pixel values
+            pixel_ubound:           upper bound for state/image pixel values
         '''
         super(Environment, self).__init__()
         # State bounds
@@ -354,7 +371,10 @@ class Environment(gym.Env):
                                                 high=high, 
                                                 dtype=np.float32)
 
-    def reset(self, seed=0, desiderata=None):
+    def reset(self, seed=None, options=None, desiderata=None):
+        super().reset(seed=seed)
+        if options is not None and desiderata is None and 'desiderata' in options:
+            desiderata = options['desiderata']
         self.timestep = 0
         self.image_t0 = utils.random_image(size=(self.edge_len,self.edge_len), 
                                            low=self.pixel_lbound, 
@@ -365,12 +385,13 @@ class Environment(gym.Env):
                                                   high=self.pixel_ubound))
         lows = self.observation_boundaries[:, 0]
         highs = self.observation_boundaries[:, 1]
-        if not desiderata:
-            self.desiderata = np.random.uniform(low=lows, high=highs).astype(np.float32)
+        if desiderata is not None:
+            self.rewarder.desiderata = np.array(desiderata, dtype=np.float32)
+        elif getattr(self.rewarder, 'desiderata', None) is None:
+            self.rewarder.desiderata = np.random.uniform(low=lows, high=highs).astype(np.float32)
         else:
-            self.desiderata = desiderata
-        self.rewarder.desiderata = self.desiderata
-        return_obs = self.desiderata
+            self.rewarder.desiderata = np.array(self.rewarder.desiderata, dtype=np.float32)
+        return_obs = self.rewarder.desiderata
         return_info = {'image': 'reset to t0',
                        'timestep': self.timestep}
         return return_obs, return_info
@@ -400,9 +421,9 @@ class Environment(gym.Env):
         terminated = bool(terminated | truncated)
         # Observation
         '''The learner onserves the desiderata and acts accordingly'''
-        observation = self.desiderata
+        observation = self.rewarder.desiderata
         # Info
-        info = {'desiderata': self.desiderata,
+        info = {'desiderata': self.rewarder.desiderata,
                 'observation': self.rewarder.observation,
                 'reward': reward}
         return observation, reward, terminated, truncated, info
@@ -428,7 +449,7 @@ class Environment(gym.Env):
         terminated = bool(self.timestep >= self.max_timesteps) 
         terminated = bool(terminated | truncated)
         observation = self.rewarder.observation
-        info = {'desiderata': self.desiderata,
+        info = {'desiderata': self.rewarder.desiderata,
                 'observation': observation,
                 'reward': reward}
         return terminated, info
