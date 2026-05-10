@@ -1,0 +1,10 @@
+gymnasium
+matplotlib
+numpy
+opencv-python
+pyyaml
+scikit-image
+scipy
+ipykernel
+stable-baselines3
+tensorboard
