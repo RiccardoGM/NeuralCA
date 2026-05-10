@@ -1,6 +1,7 @@
 ## Import libraries
 import numpy as np
 import matplotlib.pyplot as plt
+import skimage as ski
 
 
 # ************************************************ #
@@ -96,6 +97,73 @@ def abs_clip(x):
     abs_x = np.abs(x)
     
     return np.clip(abs_x, 0, 1)
+
+
+#-----------------\\  detect_objects_image
+
+def detect_objects_image(state, sigma=4.0, threshold='otsu', threshold_rel=0.5,
+                         connectivity=2, foreground=0, background=255):
+    """
+    Build an amplitude-invariant object image from a 2D state.
+
+    The state is smoothed and min-max normalised to [0, 1] before thresholding,
+    so equivalent morphologies are detected consistently across value ranges.
+
+    returns:
+        object_image: uint8 image with foreground in `foreground` and background
+                      in `background`.
+        n_objects:    number of connected components in the foreground.
+        labels:       labelled component map from skimage.measure.label.
+    """
+    if len(state.shape) != 2:
+        raise ValueError("input must be a 2D array")
+
+    smoothed = ski.filters.gaussian(state, sigma=sigma) if sigma > 0 else state
+
+    min_val = np.min(smoothed)
+    max_val = np.max(smoothed)
+    if np.isclose(max_val, min_val):
+        labels = np.zeros_like(smoothed, dtype=np.int32)
+        object_image = np.full(smoothed.shape, background, dtype=np.uint8)
+        return object_image, 0, labels
+
+    normalized = (smoothed - min_val) / (max_val - min_val)
+
+    if threshold == 'otsu':
+        level = ski.filters.threshold_otsu(normalized)
+    elif threshold == 'relative':
+        level = float(np.clip(threshold_rel, 0.0, 1.0))
+    else:
+        level = float(np.clip(threshold, 0.0, 1.0))
+
+    binary = normalized > level
+    labels = ski.measure.label(binary, return_num=False, connectivity=connectivity)
+    n_objects = int(np.max(labels))
+
+    object_image = np.full(binary.shape, background, dtype=np.uint8)
+    object_image[binary] = np.uint8(foreground)
+    return object_image, n_objects, labels
+
+
+#-----------------\\  display_detected_objects
+
+def display_detected_objects(state, sigma=4.0, threshold='otsu', threshold_rel=0.5,
+                             connectivity=2, foreground=0, background=255):
+    """
+    Display detected objects with black foreground on white background.
+    Returns the displayed object image and number of detected objects.
+    """
+    object_image, n_objects, _ = detect_objects_image(
+        state,
+        sigma=sigma,
+        threshold=threshold,
+        threshold_rel=threshold_rel,
+        connectivity=connectivity,
+        foreground=foreground,
+        background=background,
+    )
+    display_image(object_image, vmin=0, vmax=255)
+    return object_image, n_objects
 
 
 #-----------------\\  n_free_parameters
